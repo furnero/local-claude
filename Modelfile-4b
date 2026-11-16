@@ -1,0 +1,5 @@
+# Faster, weaker fallback: Qwen 3.5 4B, fits fully in 8 GB VRAM with room for context.
+# Build:  ollama create local-agent-4b -f Modelfile-4b
+# Use:    local-claude --local-model local-agent-4b
+FROM qwen3.5:4b
+PARAMETER num_ctx 49152

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src aster-preview:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Local Claude</title>
+    <link rel="stylesheet" href="vendor/katex.min.css" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="vendor/vendor.js"></script>
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <div class="app" id="app">
+      <aside class="sidebar" id="sidebar">
+        <div class="sb-top">
+          <button class="icon-btn" id="sb-toggle" title="Toggle sidebar (Ctrl+B)"></button>
+          <div class="wordmark" id="wordmark">Local Claude</div>
+        </div>
+        <div class="sb-actions">
+          <button class="sb-btn" id="sb-new" title="New chat (Ctrl+N)"></button>
+          <button class="sb-btn" id="sb-search" title="Search chats (Ctrl+K)"></button>
+        </div>
+        <div class="sb-lists" id="sb-lists"></div>
+        <div class="sb-bottom">
+          <button class="profile" id="profile"></button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="titlebar" id="titlebar"></header>
+        <div class="views">
+          <section class="view welcome" id="welcome">
+            <div class="greet" id="greet"></div>
+            <div class="composer-slot" id="slot-welcome"></div>
+            <div class="chips" id="chips"></div>
+          </section>
+          <section class="view thread-view" id="thread-view" hidden>
+            <div class="scroller" id="scroller"><div class="thread" id="thread"></div></div>
+            <div class="dock">
+              <button class="to-bottom" id="to-bottom" title="Scroll to bottom"></button>
+              <div class="composer-slot" id="slot-dock"></div>
+              <div class="dock-note" id="dock-note">Runs offline on this PC. Local models make mistakes, so check important info.</div>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <aside class="preview" id="preview">
+        <div class="preview-head">
+          <span class="t" id="preview-title">Preview</span>
+          <div class="seg" id="preview-seg"></div>
+          <button class="icon-btn sm" id="preview-close" title="Close"></button>
+        </div>
+        <iframe class="preview-frame" id="preview-frame" sandbox="allow-scripts allow-modals allow-forms allow-pointer-lock allow-downloads" title="Preview"></iframe>
+        <pre class="preview-code" id="preview-code" hidden></pre>
+      </aside>
+    </div>
+    <div class="toasts" id="toasts"></div>
+  </body>
+</html>

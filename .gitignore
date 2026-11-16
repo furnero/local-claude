@@ -1,0 +1,6 @@
+# chats, settings, the colibri key and logs of the app
+data/
+# the model's own notes about my projects
+notes/
+node_modules/
+dist/

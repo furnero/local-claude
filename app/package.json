@@ -1,0 +1,27 @@
+{
+  "name": "local-claude",
+  "productName": "Local Claude",
+  "version": "1.0.0",
+  "description": "Local Claude - a Claude-app-style chat for the local Qwen models in Ollama (fork of Aster).",
+  "main": "src/main/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "vendor": "node scripts/vendor.js",
+    "make-icon": "node scripts/make-icon.js",
+    "make-exe": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-exe.ps1",
+    "test": "node test/fake-api.js 8787"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  },
+  "devDependencies": {
+    "electron": "^44.7.2",
+    "esbuild": "^0.28.2",
+    "marked": "^18.1.1",
+    "dompurify": "^3.4.17",
+    "highlight.js": "^11.12.0",
+    "katex": "^0.19.0"
+  }
+}
