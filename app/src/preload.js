@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('aster', {
   colibriStatus: call('colibri:status'),
   colibriStop: call('colibri:stop'),
   colibriPickFolder: call('colibri:pickFolder'),
+  setupPlan: call('setup:plan'),
+  setupApply: call('setup:apply'),
+  setupDismiss: call('setup:dismiss'),
   pullModel: call('ollama:pull'),
   cancelPull: call('ollama:cancelPull'),
 

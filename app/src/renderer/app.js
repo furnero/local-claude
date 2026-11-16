@@ -4,6 +4,7 @@ import { h, openMenu, closeMenu, confirmDialog, promptDialog, toast, openModal, 
 import { Thread } from './thread.js';
 import { Composer } from './composer.js';
 import { openSettings } from './settings.js';
+import { openSetup } from './setup.js';
 
 const A = window.aster;
 const $ = (id) => document.getElementById(id);
@@ -92,12 +93,13 @@ const app = {
   retry: () => regenerate(),
   retryMenu(btn) {
     const items = [{ label: 'Retry', icon: 'retry', onClick: () => regenerate() }, { sep: true }, { title: 'Retry with' }];
-    for (const m of S.models) if (m.id !== app.currentModel()) items.push({ label: m.name, desc: m.desc, onClick: () => regenerate(m.id) });
+    for (const m of S.models) if (m.id !== app.currentModel() && !m.unavailable) items.push({ label: m.name, desc: m.desc, onClick: () => regenerate(m.id) });
     openMenu(btn, items, { placement: 'auto' });
   },
   editMessage,
   preview,
   openSettings: (tab) => openSettings(app, tab),
+  openSetup: (override) => openSetup(app, override),
   onSettingsClosed() {
     app.refreshSettingsPage = null;
   },
@@ -709,6 +711,10 @@ async function init() {
   });
   composer.focus();
   window.__aster = { app, thread, composer, state: () => S, current: () => current, openConv, newChat, setDraftCwd: (p) => (draftCwd = p) }; // test hook
+  // a PC where the app cannot work yet (no Ollama, or a mode without its model): offer the setup once
+  A.setupPlan()
+    .then((p) => p.needed && !document.querySelector('.overlay') && openSetup(app))
+    .catch(() => {});
 }
 
 init();

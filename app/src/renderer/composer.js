@@ -257,6 +257,8 @@ export class Composer {
     const current = this.app.currentModel();
     const items = [{ title: 'Mode' }];
     for (const m of this.app.models()) {
+      // a mode whose engine is not on this PC is only listed for a chat that already uses it
+      if (m.unavailable && m.id !== current) continue;
       items.push({
         label: m.name,
         desc: m.desc,

@@ -74,6 +74,9 @@ const requests = () =>
   const cardText = () => c.ev(`${lastCard}?.innerText || ''`);
   const lastText = () => c.ev(`[...document.querySelectorAll('.turn-assistant')].pop()?.innerText || ''`);
 
+  // the window may still be starting when this script connects
+  await waitFor(`typeof window.__aster === 'object'`, 30000);
+
   // 1. plain answer with visible thinking
   await c.ev('window.__aster.newChat()');
   await say('hello there');
@@ -316,6 +319,74 @@ const requests = () =>
   check('thinking off sends thinking disabled', r.body.thinking?.type === 'disabled');
   await c.ev(`window.__aster.app.saveSettings({ effort: 'default' })`);
   await c.shot('9-final');
+
+  // 10. set up for this PC (hardware -> models). The test API honours a faked hardware.
+  const API = process.env.ASTER_BASE_URL || 'http://127.0.0.1:8797';
+  const allRequests = () => fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  check('no setup dialog opened by itself (every mode has its model)', !(await c.ev(`!!document.querySelector('.setup')`)));
+  let plan = await c.ev('window.aster.setupPlan()');
+  check(
+    'plan for the 8 GB test card is the setup in use',
+    plan.modes.quick.pick.base === 'qwen3.5:4b' && plan.modes.smart.pick.base === 'qwen3.5:9b' && plan.modes.coder.pick.base === 'huihui_ai/qwen3.5-abliterated:9b-OmniCoder' && plan.needed === false && plan.card === true,
+    `${plan.modes.quick.pick.base} ${plan.modes.smart.pick.base} ${plan.modes.coder.pick.base} needed:${plan.needed}`,
+  );
+  check('the plan says where each model sits', plan.modes.quick.pick.where === 'gpu' && plan.modes.smart.pick.where === 'split' && plan.modes.smart.pick.installed === true);
+  plan = await c.ev('window.aster.setupPlan({ gpu: null, ramMb: 16384 })');
+  check('plan without a graphics card: small models on the CPU, with a note', plan.card === false && plan.modes.smart.pick.base === 'qwen3.5:4b' && plan.modes.quick.pick.base === 'qwen3.5:2b' && plan.modes.smart.pick.where === 'cpu' && plan.notes.some((n) => /CPU/.test(n)), `${plan.modes.quick.pick.base} ${plan.modes.smart.pick.base}`);
+
+  // the download box in Settings: real model names must pass, nonsense must not
+  let pr = await c.ev(`window.aster.pullModel('bad name!')`);
+  check('download refuses something that is not a model name', pr.ok === false && /model name/.test(pr.error || ''));
+  pr = await c.ev(`window.aster.pullModel('some-broken/model:1b')`);
+  check('a failed download reports the error', pr.ok === false && /does not exist/.test(pr.error || ''), pr.error);
+  pr = await c.ev(`window.aster.pullModel('huihui_ai/qwen3.5-abliterated:2B')`);
+  check('download accepts a normal model name', pr.ok === true, pr.error || '');
+  check('the download went to Ollama with that name', allRequests().some((r) => r.path === '/api/pull' && r.body?.model === 'huihui_ai/qwen3.5-abliterated:2B'));
+
+  // the dialog, for a PC with a 24 GB card
+  await c.ev(`window.__aster.app.openSetup({ gpu: { name: 'Big Card', vramMb: 24576, vendor: 'nvidia' }, ramMb: 32768 })`);
+  const dlg = await waitFor(`document.querySelectorAll('.setup .setup-mode').length === 3 && document.querySelector('.setup').innerText`);
+  check('setup dialog shows the hardware', /Big Card/.test(dlg || '') && /24 GB/.test(dlg || '') && /32 GB/.test(dlg || ''), (dlg || '').slice(0, 120).replace(/\n/g, ' | '));
+  const sel = (mode) => c.ev(`document.querySelector('.setup-mode[data-mode="${mode}"] select').value`);
+  check('setup dialog recommends 27B models for it', (await sel('smart')) === 'qwen3.5:27b' && (await sel('coder')) === 'huihui_ai/qwen3.5-abliterated:27b' && (await sel('quick')) === 'qwen3.5:9b', `${await sel('quick')} ${await sel('smart')} ${await sel('coder')}`);
+  const btn = () => c.ev(`document.querySelector('.setup .btn.dark')?.innerText || ''`);
+  check('the button says how much it will download', /^Download 33 GB and apply$/.test(await btn()), await btn());
+  check('nothing was changed by opening the dialog', (await c.ev(`window.__aster.state().models.find(m => m.id === 'smart').base`)) === 'qwen3.5:9b');
+  await c.shot('10-setup');
+  // pick a smaller Coder by hand, then apply
+  await c.ev(`(() => { const s = document.querySelector('.setup-mode[data-mode="coder"] select'); s.value = 'huihui_ai/qwen3.5-abliterated:9b-OmniCoder'; s.dispatchEvent(new Event('change')); })()`);
+  check('changing a choice updates the download size', /^Download 17 GB and apply$/.test(await btn()), await btn());
+  await c.ev(`document.querySelector('.setup .btn.dark').click()`);
+  const closed = await waitFor(`!document.querySelector('.setup')`, 20000);
+  check('apply downloaded the missing model and closed the dialog', !!closed && allRequests().some((r) => r.path === '/api/pull' && r.body?.model === 'qwen3.5:27b'));
+  const st = await c.ev(`window.__aster.state().models.map(m => m.id + '=' + m.base + '@' + m.ctx).join(' ')`);
+  check('the modes now use the picked models', /quick=qwen3\.5:9b@49152/.test(st) && /smart=qwen3\.5:27b@49152/.test(st) && /coder=huihui_ai\/qwen3\.5-abliterated:9b-OmniCoder@49152/.test(st), st);
+  await c.ev('window.__aster.newChat()');
+  await c.ev(`window.__aster.app.setModel('smart')`);
+  await say('hello after setup');
+  await idle();
+  r = requests().pop();
+  check('a chat after the setup runs the new Smart model', r.body.model === 'lc-qwen3.5-27b-48k', r.body.model);
+  check('no slow-model hint when nothing is wrong', !(await c.ev(`!!document.querySelector('.hint-slow')`)));
+
+  // a mode is only saved when its model is installed
+  const ap = await c.ev(`window.aster.setupApply({ quick: { base: 'qwen3.5:0.8b', ctx: 16384 } })`);
+  check('apply skips a mode whose model is not installed', ap.skipped.includes('quick') && !ap.saved.length && (await c.ev(`window.aster.setupPlan()`)).modes.quick.current.base === 'qwen3.5:9b');
+
+  // 11. the model turns out to run on the CPU although there is a card: the chat says so, once
+  await fetch(`${API}/test/placement`, { method: 'POST', body: JSON.stringify({ size: 6e9, size_vram: 0 }) });
+  await say('hello on the wrong device');
+  await idle();
+  const hintText = await waitFor(`document.querySelector('.hint-slow')?.innerText`, 8000);
+  check('slow-model hint names the cause and a smaller model', /completely on the CPU/.test(hintText || '') && /Test GPU/.test(hintText || '') && /qwen3\.5:9b/.test(hintText || ''), (hintText || '').slice(0, 160).replace(/\n/g, ' | '));
+  await say('hello again on the wrong device');
+  await idle();
+  check('the hint is shown once per model', (await c.ev(`document.querySelectorAll('.hint-slow').length`)) === 1);
+  await c.shot('11-hint');
+  await c.ev(`[...document.querySelectorAll('.hint-slow .btn')].find(b => /again/.test(b.innerText)).click()`);
+  const off = await waitFor(`!document.querySelector('.hint-slow') && Object.keys(window.__aster.app.settings().hintsOff || {}).join(',')`, 5000);
+  check('"Don\'t show again" removes it and is remembered', off === 'smart:qwen3.5:27b', String(off));
+  await fetch(`${API}/test/placement`, { method: 'POST', body: 'null' });
 
   c.close();
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');

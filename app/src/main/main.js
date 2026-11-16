@@ -21,6 +21,7 @@ const chat = require('./chat');
 const tools = require('./tools');
 const ollama = require('./ollama');
 const colibri = require('./colibri');
+const hardware = require('./hardware');
 const project = require('./project');
 const processes = require('./processes');
 const { MODELS, EFFORTS, modeOf } = require('./models');
@@ -147,15 +148,92 @@ function getConv(id) {
 // ---------------------------------------------------------------- IPC
 
 const handle = (ch, fn) => ipcMain.handle(ch, (_e, ...args) => fn(...args));
+const modelInfoOf = (id) => MODELS.find((m) => m.id === modeOf(id));
+
+// ---------------------------------------------------------------- setup for this PC's hardware
+
+const SETUP_MODES = MODELS.filter((m) => !m.engine).map((m) => m.id);
+
+/**
+ * What this PC has, what the app would pick for it, and what is installed already.
+ * `override` replaces the detected hardware; only the test API honours it.
+ */
+async function setupPlan(override) {
+  let hw = await hardware.probe();
+  if (ollama.FAKE && override && typeof override === 'object') hw = { ...hw, ...override, gpu: override.gpu || null, gpus: override.gpu ? [override.gpu] : [] };
+  const rec = hardware.recommend(hw);
+  const st = await ollama.installState();
+  const isIn = (base) => ollama.has(st.names, base);
+  const modes = {};
+  for (const id of SETUP_MODES) {
+    const cur = ollama.modeConfig(id);
+    const pick = rec.modes[id];
+    modes[id] = {
+      name: modelInfoOf(id).name,
+      pick: { base: pick.base, sizeMb: pick.sizeMb, ctx: pick.ctx, where: pick.where, spillMb: pick.spillMb, installed: isIn(pick.base) },
+      current: { base: cur.base, ctx: cur.ctx, installed: isIn(cur.base) },
+      choices: hardware.LADDERS[id].map((m) => ({ base: m.base, sizeMb: m.sizeMb, installed: isIn(m.base), ...hardware.fitModel(m, hw) })),
+    };
+  }
+  const s = store.getSettings();
+  const missing = SETUP_MODES.filter((id) => !modes[id].current.installed);
+  return {
+    hw: { gpu: hw.gpu, gpus: hw.gpus, ramMb: hw.ramMb, cpu: hw.cpu, disk: hw.disk },
+    card: rec.card,
+    notes: rec.notes,
+    modes,
+    ollama: { found: st.found, ok: st.ok },
+    // the dialog opens by itself only on a PC where the app cannot work yet, and only until it was answered once
+    needed: !s.setup?.done && !s.setup?.dismissed && (!st.ok || missing.length > 0),
+    done: !!s.setup?.done,
+    colibri: { available: colibri.available() },
+  };
+}
+handle('setup:plan', (override) => setupPlan(override));
+
+/**
+ * Saves the chosen model and context per mode. A mode is only saved when its model is really
+ * installed, so a cancelled download never leaves a mode pointing at nothing.
+ */
+handle('setup:apply', async (picks) => {
+  const st = await ollama.installState();
+  const modes = { ...(store.getSettings().modes || {}) };
+  const saved = [];
+  const skipped = [];
+  const warnings = [];
+  for (const id of SETUP_MODES) {
+    const p = picks?.[id];
+    if (!p || typeof p.base !== 'string') continue;
+    if (!ollama.has(st.names, p.base)) {
+      skipped.push(id);
+      continue;
+    }
+    const ctx = Math.round(Math.min(Math.max(Number(p.ctx) || 49152, 2048), 1048576));
+    modes[id] = { base: p.base, ctx };
+    saved.push(id);
+    const caps = await ollama.capsOf(p.base);
+    if (caps && !caps.includes('tools')) warnings.push(`${p.base} has no tool support: ${modelInfoOf(id).name} mode can only chat with it.`);
+  }
+  const done = saved.length > 0 && !skipped.length;
+  store.saveSettings({ modes, setup: { ...(store.getSettings().setup || {}), done: done || !!store.getSettings().setup?.done, at: Date.now() } });
+  ollama.settingsChanged();
+  return { saved, skipped, warnings };
+});
+handle('setup:dismiss', () => {
+  store.saveSettings({ setup: { ...(store.getSettings().setup || {}), dismissed: true } });
+  return true;
+});
 
 handle('state:get', () => ({
   hasKey: true, // no key: everything runs on the local Ollama
   keyHint: null,
   defaultCwd: config.workingDirectory(),
-  settings: store.getSettings(),
+  // a default mode whose engine is not on this PC falls back to Smart (the saved setting stays)
+  settings: modelInfoOf(store.getSettings().model)?.engine === 'colibri' && !colibri.available() ? { ...store.getSettings(), model: 'smart' } : store.getSettings(),
+  // "unavailable" modes stay in the list so old chats keep their name, but the mode menu leaves them out
   models: MODELS.map(({ id, name, desc, smart, engine }) =>
     engine === 'colibri'
-      ? { id, name, desc, smart, engine, base: colibri.labelOf(colibri.config()), ctx: colibri.config().ctx }
+      ? { id, name, desc, smart, engine, base: colibri.labelOf(colibri.config()), ctx: colibri.config().ctx, unavailable: !colibri.available() }
       : { id, name, desc: `${ollama.modeConfig(id).base} · ${desc}`, smart, base: ollama.modeConfig(id).base, ctx: ollama.modeConfig(id).ctx },
   ),
   efforts: EFFORTS,
@@ -208,7 +286,7 @@ handle('colibri:pickFolder', async (current) => {
 });
 handle('ollama:pull', (name) => {
   name = String(name || '').trim();
-  if (!/^[w.-/]+(:[w.-]+)?$/.test(name)) return { ok: false, error: 'That does not look like a model name (example: qwen3.5:9b).' };
+  if (!/^[\w.\-/]+(:[\w.\-]+)?$/.test(name)) return { ok: false, error: 'That does not look like a model name (example: qwen3.5:9b).' };
   return ollama.pull(name, (p) => send('ollama:pull', { name, ...p }));
 });
 handle('ollama:cancelPull', () => ollama.cancelPull());

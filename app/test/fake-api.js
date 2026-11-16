@@ -99,6 +99,7 @@ async function stream(res, model, blocks, stopReason, usage) {
   res.end();
 }
 
+let fakePlacement = null;
 const server = http.createServer(async (req, res) => {
   let body = '';
   for await (const c of req) body += c;
@@ -124,6 +125,33 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ data: [{ id: 'claude-sonnet-5-5', type: 'model', display_name: 'Claude Sonnet 5.5', created_at: '2026-01-01T00:00:00Z' }], has_more: false, first_id: 'claude-sonnet-5-5', last_id: 'claude-sonnet-5-5' }));
+    return;
+  }
+  // Ollama's download route: progress as JSON lines. A name with "broken" fails like a missing model.
+  if (req.method === 'POST' && url.pathname === '/api/pull') {
+    const name = JSON.parse(body).model;
+    res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    if (/broken/.test(name)) {
+      res.end(`${JSON.stringify({ status: 'pulling manifest' })}\n${JSON.stringify({ error: 'pull model manifest: file does not exist' })}\n`);
+      return;
+    }
+    for (const line of [{ status: 'pulling manifest' }, { status: 'downloading', total: 1000, completed: 400 }, { status: 'downloading', total: 1000, completed: 1000 }, { status: 'success' }]) {
+      res.write(`${JSON.stringify(line)}\n`);
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    res.end();
+    return;
+  }
+  // Ollama's "what is loaded" route. Empty unless a test set a placement with POST /test/placement.
+  if (req.method === 'GET' && url.pathname === '/api/ps') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ models: fakePlacement ? [{ name: 'loaded-model', ...fakePlacement }] : [] }));
+    return;
+  }
+  if (req.method === 'POST' && url.pathname === '/test/placement') {
+    fakePlacement = JSON.parse(body); // { size, size_vram } in bytes, or null
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
     return;
   }
   if (req.method !== 'POST' || url.pathname !== '/v1/messages') {

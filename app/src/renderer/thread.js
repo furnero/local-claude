@@ -1042,6 +1042,9 @@ export class Thread {
       case 'context_trimmed':
         this.showNotice("This chat is longer than the model's context window, so older tool output and messages are left out of what the model sees. Its notes are kept.", 'info');
         break;
+      case 'hint':
+        this.showHint(ev);
+        break;
       case 'inbox_delivered':
         this.markQueuedDelivered();
         break;
@@ -1101,6 +1104,24 @@ export class Thread {
   showNotice(text, kind = 'info', detail) {
     const n = h('div', { class: `notice ${kind}` }, h('span', { html: icon(kind === 'error' ? 'alert' : 'info', 16) }), h('span', { class: 'grow', text: detail ? `${text} ${detail}` : text }));
     (this.lastTurn()?.body || this.root).append(n);
+  }
+
+  /** "This model is slow on this PC": said once, with a way to the setup dialog and a way to silence it. */
+  showHint(ev) {
+    const n = h('div', { class: 'notice info hint-slow' }, h('span', { html: icon('info', 16) }), h('span', { class: 'grow', text: ev.text }));
+    n.append(
+      h('button', { class: 'btn ghost sm', text: 'Check this PC', onclick: () => this.app.openSetup() }),
+      h('button', {
+        class: 'btn ghost sm',
+        text: "Don't show again",
+        onclick: async () => {
+          await this.app.saveSettings({ hintsOff: { ...(this.app.settings().hintsOff || {}), [ev.key]: true } });
+          n.remove();
+        },
+      }),
+    );
+    (this.lastTurn()?.body || this.root).append(n);
+    this.stickIfNear();
   }
 
   showError(err) {

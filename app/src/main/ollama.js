@@ -9,6 +9,7 @@ const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
 const store = require('./store');
 const { modeOf, MODELS } = require('./models');
+const hardware = require('./hardware');
 
 // test hook: a fake Anthropic-style API instead of Ollama (see test/fake-api.js)
 const BASE = process.env.ASTER_BASE_URL || 'http://127.0.0.1:11434';
@@ -185,7 +186,8 @@ function modeConfig(mode) {
 // a context size typed by hand keeps its exact number in the name ("-20000t")
 const derivedName = (base, ctx) => `lc-${base.toLowerCase().replace(/[^a-z0-9.]+/g, '-')}-${ctx % 1024 === 0 ? `${ctx / 1024}k` : `${ctx}t`}`;
 const isDerived = (name) => /^lc-.*-\d+[kt](:latest)?$/.test(name) || /^local-agent/.test(name);
-const has = (names, n) => names.includes(n) || names.includes(`${n}:latest`);
+// tags differ in letter case between publishers ("4B", "9b"); Ollama itself does not care
+const has = (names, n) => names.some((x) => x.toLowerCase() === n.toLowerCase() || x.toLowerCase() === `${n.toLowerCase()}:latest`);
 
 const building = new Map();
 /**
@@ -240,19 +242,64 @@ async function prepare(mode, onStatus = () => {}) {
 
 // ---------------------------------------------------------------- for the settings page
 
-let gpuCache;
-function gpu() {
-  if (gpuCache !== undefined) return Promise.resolve(gpuCache);
-  return new Promise((resolve) => {
-    execFile('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits'], { windowsHide: true, timeout: 5000 }, (err, out) => {
-      gpuCache = null;
-      if (!err) {
-        const [name, mem] = String(out).split(/\r?\n/)[0].split(',').map((x) => x.trim());
-        if (name && Number(mem)) gpuCache = { name: name.replace(/^NVIDIA\s+/i, ''), vramMb: Number(mem) };
-      }
-      resolve(gpuCache);
-    });
-  });
+/** The graphics card the models use (any vendor, see hardware.js), or null. */
+async function gpu() {
+  const g = (await hardware.probe()).gpu;
+  return g && g.vramMb >= hardware.MIN_CARD_MB ? g : null;
+}
+
+/** Is Ollama on this PC at all? (Starting a server that is not installed would wait for nothing.) */
+function exeFound() {
+  if (FAKE) return Promise.resolve(true);
+  if (fs.existsSync(path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Ollama', 'ollama.exe'))) return Promise.resolve(true);
+  return new Promise((resolve) => execFile(process.platform === 'win32' ? 'where' : 'which', ['ollama'], { windowsHide: true, timeout: 4000 }, (err) => resolve(!err)));
+}
+
+/** For the setup dialog: { found, ok, names } = installed, answering, and the models it has. */
+async function installState() {
+  if (FAKE) return { found: true, ok: true, names: FAKE_MODELS.map((m) => m.name) };
+  const found = await exeFound();
+  let ok = await up();
+  if (!ok && found) {
+    try {
+      await ensureServer();
+      ok = true;
+    } catch {}
+  }
+  let names = [];
+  if (ok) {
+    try {
+      names = (await tags()).map((m) => m.name).filter((n) => !isDerived(n));
+    } catch {}
+  }
+  return { found, ok, names };
+}
+
+/** What a model can do ('tools', 'thinking', 'vision', ...), or null when Ollama cannot say. */
+async function capsOf(name) {
+  if (FAKE) return FAKE_MODELS.find((m) => m.name.toLowerCase() === String(name).toLowerCase())?.caps || null;
+  try {
+    const s = await show(name);
+    return Array.isArray(s.capabilities) ? s.capabilities : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Where a loaded model really sits: { ramMb, vramMb }, or null when it is not loaded. */
+async function placement(model) {
+  let list;
+  if (FAKE) {
+    // the test API can report a placement (see test/fake-api.js); by default it reports none
+    try {
+      list = ((await api('/api/ps', null, 3000)).models || []).map((m) => ({ name: m.name, ramMb: Math.max(0, Math.round(((m.size || 0) - (m.size_vram || 0)) / MB)), vramMb: Math.round((m.size_vram || 0) / MB) }));
+    } catch {
+      list = [];
+    }
+    return list[0] || null;
+  }
+  list = await loaded();
+  return list.find((m) => m.name === model || m.name === `${model}:latest`) || null;
 }
 
 /** Server state, the installed base models (with size and capabilities), GPU and mode settings. */
@@ -261,7 +308,7 @@ async function overview() {
   const s = store.getSettings();
   const mem = { ram: { totalMb: Math.round(os.totalmem() / MB), freeMb: Math.round(os.freemem() / MB) }, ramLimitGb: Number(s.ramLimitGb) || 0, keepAlive: String(s.keepAlive ?? '5m'), minCtx: MIN_CTX };
   if (FAKE) {
-    return { ...mem, ok: true, fake: true, gpu: { name: 'Test GPU', vramMb: 8192 }, modes, ctxChoices: CTX_CHOICES, models: FAKE_MODELS, loaded: [] };
+    return { ...mem, ok: true, fake: true, gpu: { name: 'Test GPU', vramMb: 8192 }, hw: await hardware.probe(), modes, ctxChoices: CTX_CHOICES, models: FAKE_MODELS, loaded: [] };
   }
   const ok = await up();
   const models = [];
@@ -283,7 +330,7 @@ async function overview() {
     }
     models.sort((a, b) => a.sizeMb - b.sizeMb);
   }
-  return { ...mem, ok, gpu: await gpu(), modes, ctxChoices: CTX_CHOICES, models, loaded: ok ? await loaded() : [] };
+  return { ...mem, ok, gpu: await gpu(), hw: await hardware.probe(), modes, ctxChoices: CTX_CHOICES, models, loaded: ok ? await loaded() : [] };
 }
 
 let pulling = null;
@@ -311,6 +358,8 @@ async function pull(name, onProgress) {
       }
     }
     showCache.clear();
+    // the test API has no model store: remember the download so it counts as installed
+    if (FAKE && !has(FAKE_MODELS.map((m) => m.name), name)) FAKE_MODELS.push({ name, sizeMb: 4000, params: '', caps: /notools/i.test(name) ? ['completion'] : ['completion', 'tools', 'thinking'], maxCtx: 262144 });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: ctrl.signal.aborted ? 'Download cancelled.' : /fetch failed|ENOTFOUND|ECONN|EAI_AGAIN/i.test(String(e.cause?.code || e.message)) ? "Couldn't reach the Ollama library. Downloading a model needs internet." : String(e.message || e) };
@@ -327,4 +376,4 @@ function settingsChanged() {
   showCache.clear();
 }
 
-module.exports = { unloadLoaded, release, unloadAll, estimateRamMb, BASE, FAKE, ensureServer, prepare, modeConfig, derivedName, overview, pull, cancelPull, settingsChanged, DEFAULT_MODES };
+module.exports = { unloadLoaded, release, unloadAll, estimateRamMb, BASE, FAKE, ensureServer, prepare, modeConfig, derivedName, overview, pull, cancelPull, settingsChanged, installState, capsOf, placement, gpu, has, DEFAULT_MODES };

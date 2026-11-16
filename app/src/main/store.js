@@ -66,6 +66,8 @@ const DEFAULT_SETTINGS = {
   modes: {}, // mode -> { base: Ollama model, ctx: context window }; empty = defaults in ollama.js
   ramLimitGb: 0, // most system RAM a loaded model may take (the part that does not fit on the GPU); 0 = no limit
   keepAlive: '5m', // how long a model stays loaded after an answer: '0' | '5m' | '30m' | '-1' (until the app closes)
+  setup: {}, // { done, dismissed, at }: the "set up for this PC" dialog was applied or closed (see hardware.js)
+  hintsOff: {}, // "mode:model" -> true after "Don't show again" on a "this model is slow here" hint
   colibri: {}, // the colibri engine for the Coder 30B mode: { dir, modelDir, cap, ctx, port, gpu }; empty = defaults in colibri.js
   selfCheck: 'smart', // off | smart | always: make the model check its work before it finishes
   effort: 'default', // default (thinking on) | off

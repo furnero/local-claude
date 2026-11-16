@@ -12,6 +12,7 @@ const mcp = require('./mcp');
 const project = require('./project');
 const ollama = require('./ollama');
 const colibri = require('./colibri');
+const hardware = require('./hardware');
 const context = require('./context');
 const { modelInfo, modeOf, costOf, MODELS } = require('./models');
 
@@ -71,6 +72,38 @@ function createConversation(model) {
     attachNames: {},
     starred: false,
   };
+}
+
+// ---------------------------------------------------------------- "this model is slow here"
+
+// The setup dialog guesses from the hardware; what happens after a model is loaded is the truth.
+// When Ollama keeps a model off the graphics card, or answers crawl, the chat says so once and
+// points to the setup dialog. Nothing is switched by itself.
+const hinted = new Set(); // "mode:model" already shown in this app run
+const slowRuns = new Map(); // "mode:model" -> slow answers in a row
+const SLOW_TPS = { quick: 6, smart: 2.5, coder: 2.5 }; // tokens per second, while writing (loading and reading are not counted)
+
+async function speedCheck(conv, rt, meta) {
+  if (rt.engine) return; // the colibri mode is slow by design and says so itself
+  const key = `${conv.model}:${rt.base}`;
+  if (hinted.has(key) || store.getSettings().hintsOff?.[key]) return;
+  let text = null;
+  const place = await ollama.placement(rt.model).catch(() => null);
+  const total = place ? place.ramMb + place.vramMb : 0;
+  if (total > 0) {
+    const card = await ollama.gpu().catch(() => null);
+    if (card && place.vramMb === 0) text = `Ollama is running ${rt.base} completely on the CPU, although this PC has a ${card.name}. Either Ollama cannot use that card, or its memory is taken by something else.`;
+    else if (place.ramMb / total > 0.6) text = `${Math.round((place.ramMb / total) * 100)}% of ${rt.base} sits in normal RAM instead of on the graphics card, which makes it slow.`;
+  }
+  if (!text && meta.tps != null && (meta.usage?.output_tokens || 0) >= 60) {
+    const slow = meta.tps < (SLOW_TPS[conv.model] || 2.5);
+    slowRuns.set(key, slow ? (slowRuns.get(key) || 0) + 1 : 0);
+    if (slowRuns.get(key) >= 2) text = `${rt.base} is writing at about ${meta.tps} tokens a second on this PC.`;
+  }
+  if (!text) return;
+  hinted.add(key);
+  const smaller = hardware.stepDown(conv.model, rt.base);
+  emit(conv.id, { type: 'hint', key, text: `${text}${smaller ? ` A smaller model, for example ${smaller}, would answer faster.` : ''}` });
 }
 
 // A slow engine (colibri) keeps what it has read of a chat and only reads what is new, as long as
@@ -314,6 +347,7 @@ async function runTurn(conv, opts) {
       store.addUsage(conv.model, final.usage || {}, costOf());
       store.saveConversation(conv);
       emit(conv.id, { type: 'msg_done', msgIndex, content, meta: conv.meta[msgIndex], stopReason: final.stop_reason, stopDetails: null });
+      speedCheck(conv, rt, conv.meta[msgIndex]).catch(() => {});
 
       const uses = content.filter((b) => b.type === 'tool_use');
       if (uses.length) {

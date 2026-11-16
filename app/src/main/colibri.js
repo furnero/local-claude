@@ -150,7 +150,7 @@ async function prepare(onStatus = () => {}, freeOllama = async () => {}) {
   let id = await serving(c);
   if (id === 'foreign') {
     // something else answers on that port, or a server from before the key existed: replace it
-    await stop();
+    await stop(true);
     id = await serving(c);
     if (id === 'foreign') throw problem(`Another program is answering on 127.0.0.1:${c.port} and does not accept this app's key. Stop it, or change the port in Settings → Local models.`);
   }
@@ -173,11 +173,16 @@ function killTree(p) {
   } catch {}
 }
 
-/** Stops the server (the one this app started, or any on the configured port). */
-async function stop() {
+/**
+ * Stops this app's server. A server on the port that does not take this app's key belongs to
+ * someone else (a second copy of the app, a hand-started one) and is left alone, unless
+ * `force` says this app needs the port now.
+ */
+async function stop(force = false) {
   if (FAKE_BASE) return;
   const c = config();
-  const running = !!(await serving(c));
+  const id = await serving(c);
+  const running = !!id && (id !== 'foreign' || force);
   if (running && installed(c)) {
     await new Promise((resolve) => {
       const p = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `""${launcher(c)}" stop --port ${c.port}"`], { cwd: c.dir, windowsHide: true, windowsVerbatimArguments: true, stdio: 'ignore', env: cleanEnv(c) });
@@ -196,4 +201,11 @@ async function status() {
   return { ...c, installed: installed(c), modelReady: modelReady(c), running: ['string'].includes(typeof (await serving(c))), label: labelOf(c), capChoices: CAP_CHOICES, log: logFile() };
 }
 
-module.exports = { prepare, stop, status, config, labelOf, LABEL, DEFAULTS };
+/** Is the engine and a model for it on this PC? The Coder 30B mode is only offered when it is. */
+function available() {
+  if (FAKE_BASE) return true;
+  const c = config();
+  return installed(c) && modelReady(c);
+}
+
+module.exports = { prepare, stop, status, config, available, labelOf, LABEL, DEFAULTS };

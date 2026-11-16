@@ -33,6 +33,9 @@ Ollama is started automatically. The first message in a mode prepares its model,
 | **Context window** | Each mode's model gets the context size you pick (Ollama's default is too small). The bar next to the mode name shows how full it is; when a chat outgrows it, the oldest tool output is left out of what the model sees, then the oldest turns. The saved chat is never cut. |
 | **Memory** | Settings → Local models → Memory. **RAM limit**: the part of a model that does not fit on the graphics card sits in normal RAM; if a loaded model takes more than the limit (measured from Ollama, not guessed), the app unloads it and says so. **Keep the model in memory**: unload right after each answer / 5 min / 30 min / until the app closes. Each mode card also shows a rough "needs about X GB of RAM". |
 | **Context size by hand** | The context list of each mode has "Custom…": type any number of tokens (2,048 up to what the model supports). |
+| **Set up for this PC** | The app reads the graphics cards (any vendor, real memory size from the driver's registry entry), RAM, CPU and free disk space, and picks a model and context size per mode: Quick has to fit on the card completely, Smart and Coder may reach up to about 2.5 GB into normal RAM, a PC without a usable card (under 3 GB of its own memory) gets small models on the CPU. The dialog shows what it found, lets you change each choice, downloads what is missing and saves a mode only when its model is really installed. It opens by itself only when Ollama or a mode's model is missing, otherwise from Settings → Local models → "Check this PC". The rules are in `src/main/hardware.js` and were calibrated on one measurement (the 9B at 49k on a GTX 1070: 5.4 GB on the card, 2.2 GB in RAM). Only tested on that NVIDIA card; other sizes with faked hardware. |
+| **Slow-model hint** | After an answer the app asks Ollama where the model really sits. If it runs completely on the CPU although there is a card, sits more than 60% in RAM, or writes below 6 tokens/s (Quick) or 2.5 tokens/s (Smart, Coder) twice in a row, the chat says so once, names the next smaller model and offers "Check this PC" and "Don't show again". Nothing is switched automatically. |
+| **Coder 30B only when installed** | The mode is left out of the mode menu until the colibrì engine folder and a model folder exist. Old chats in that mode keep their name. |
 | **Other models** | Settings → Local models: pick any installed Ollama model per mode, its context size, see whether it supports tools / thinking / images and whether it fits on the graphics card, and download new ones. A model without tool support becomes chat-only. |
 
 ## Files
@@ -40,6 +43,7 @@ Ollama is started automatically. The first message in a mode prepares its model,
 - `src/main/chat.js` the turn loop (stream, tools, questions, queue, self-check)
 - `src/main/ollama.js` server start, per-mode model with context window (`lc-<model>-<N>k`), model list, download
 - `src/main/colibri.js` the second engine for Coder 30B: starts and stops `coli.cmd serve`, private key, cleaned environment, log in `..\data\colibri.log`
+- `src/main/hardware.js` reads the hardware and recommends models for it (`recommend()` is a pure function, tested in `test/hardware.test.js`); `src/renderer/setup.js` is the dialog
 - `src/main/context.js` trims what is sent to fit the context window
 - `src/main/project.js` project notes + Claude memory + system prompt
 - `src/main/tools.js`, `processes.js` the tools
@@ -51,6 +55,7 @@ No model needed (fake API, about 1 minute):
 
 ```
 node test/context.test.js
+node test/hardware.test.js
 node test/fake-api.js 8797 api.jsonl                       (own terminal)
 set ASTER_BASE_URL=http://127.0.0.1:8797 & set ASTER_USERDATA=<tmp> & set LOCALCLAUDE_NOTES=<tmp> & set ASTER_TEST_OFFSCREEN=1 & set FAKE_DL=<tmp>\file.bin
 node_modules\electron\dist\electron.exe . --remote-debugging-port=9333
