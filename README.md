@@ -79,3 +79,7 @@ The bigger test drives the real app against a fake API, so it needs no model. Ho
 ## Built with
 
 Ollama, the Qwen models, the abliterated builds by huihui-ai, colibrì, Electron, the Anthropic SDK (only as the client for the local endpoint), marked, highlight.js and KaTeX. The app started as a copy of Aster, my Claude app look-alike for the API.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The libraries and fonts bundled in `app/src/renderer/vendor` keep their own licenses.
