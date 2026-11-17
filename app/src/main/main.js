@@ -476,7 +476,10 @@ app.on('before-quit', (e) => {
   for (const id of chat.activeIds()) chat.stop(id);
   processes.stopAll();
   e.preventDefault();
-  Promise.race([Promise.all([mcp.shutdown(), ollama.unloadAll(), colibri.stop()]), new Promise((r) => setTimeout(r, 2500))]).finally(() => app.quit());
+  // Stopping the colibri engine takes several seconds (its own stop command starts Python). With the
+  // short wait the app was gone first and the engine kept running with the model in memory.
+  const wait = colibri.active() ? 20000 : 2500;
+  Promise.race([Promise.all([mcp.shutdown(), ollama.unloadAll(), colibri.stop()]), new Promise((r) => setTimeout(r, wait))]).finally(() => app.quit());
 });
 
 app.on('window-all-closed', () => app.quit());

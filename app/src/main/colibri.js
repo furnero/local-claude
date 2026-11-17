@@ -30,6 +30,7 @@ function labelOf(c) {
 
 let child = null;
 let starting = null;
+let used = false; // this app run talked to its server: closing the app has to wait for it to stop
 
 function config() {
   const c = { ...DEFAULTS, ...(store.getSettings().colibri || {}) };
@@ -163,6 +164,7 @@ async function prepare(onStatus = () => {}, freeOllama = async () => {}) {
     }
     id = await starting;
   }
+  used = true;
   return { engine: 'colibri', model: id, base: labelOf(c), ctx: c.ctx, caps: ['completion', 'tools'], baseURL: baseOf(c), apiKey: apiKey() };
 }
 
@@ -208,4 +210,7 @@ function available() {
   return installed(c) && modelReady(c);
 }
 
-module.exports = { prepare, stop, status, config, available, labelOf, LABEL, DEFAULTS };
+/** Did this app run start or use the server? (Stopping it takes a few seconds; see main.js, before-quit.) */
+const active = () => !!child || !!starting || used;
+
+module.exports = { prepare, stop, status, config, available, active, labelOf, LABEL, DEFAULTS };
