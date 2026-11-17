@@ -35,6 +35,13 @@ if ($PSScriptRoot) { $Here = $PSScriptRoot } else { $Here = $null }
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
+# Started from the setup exe there is no visible console: an error outside the buttons' own
+# handling is shown in a box instead of disappearing.
+trap {
+  if (-not $SelfTest) { try { [Windows.Forms.MessageBox]::Show("The setup stopped: $($_.Exception.Message)", 'Local Claude setup', 'OK', 'Error') | Out-Null } catch {} }
+  else { "self-test error: $($_.Exception.Message)" }
+  exit 1
+}
 
 $Repo = 'furnero/local-claude'
 $SourceZip = "https://github.com/$Repo/archive/refs/heads/main.zip"
@@ -589,6 +596,12 @@ if ($SelfTest) {
   # the checkout this script sits in stands in for an installed copy
   "execution policy: process = $(Get-ExecutionPolicy -Scope Process), for started programs = $env:PSExecutionPolicyPreference, enforced by an administrator = $([bool]$EnforcedPolicy)"
   $script:target = Split-Path -Parent $Here
+  if (-not (Test-Path (Join-Path $script:target 'app\scripts\setup-cli.js'))) {
+    # started from the setup exe: the app is only fetched during a real install
+    'step 2 skipped: no app next to this script'
+    $form.Close()
+    return
+  }
   $plan = Get-Plan $script:target
   Show-Plan $plan $script:target
   foreach ($id in @('quick', 'smart', 'coder')) { "step 2 $id ($($combos[$id].Items.Count) choices): $($combos[$id].SelectedItem)" }

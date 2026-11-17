@@ -44,7 +44,9 @@ $lines = @(
   'FinishMessage='
   "TargetName=$target"
   'FriendlyName=Local Claude setup'
-  'AppLaunched=cmd /c install.cmd'
+  # ".\": on a PC where NoDefaultCurrentDirectoryInExePath is set, cmd does not look in the current folder.
+  # "< nul": the console is hidden here, so install.cmd's "pause" after an error must not wait for a key.
+  'AppLaunched=cmd /c .\install.cmd < nul'
   'PostInstallCmd=<None>'
   'AdminQuietInstCmd='
   'UserQuietInstCmd='
