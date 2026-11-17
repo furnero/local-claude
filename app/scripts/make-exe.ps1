@@ -8,7 +8,15 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $pkg = Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
 $runtime = Join-Path $root 'node_modules\electron\dist'
-if (-not (Test-Path (Join-Path $runtime 'electron.exe'))) { throw "Electron isn't installed in $root (run npm install first)." }
+if (-not (Test-Path (Join-Path $runtime 'electron.exe'))) {
+  # Since Electron 44 "npm install" no longer downloads the program itself; Electron fetches it on
+  # first use. On a fresh install nothing has used it yet, so fetch it here with Electron's own script.
+  $fetch = Join-Path $root 'node_modules\electron\install.js'
+  if (-not (Test-Path $fetch)) { throw "Electron isn't installed in $root (run npm install first)." }
+  Write-Output 'Downloading the Electron program (about 120 MB, once) ...'
+  & node $fetch
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $runtime 'electron.exe'))) { throw "Electron could not be downloaded into $root\node_modules\electron\dist. Check the internet connection and run this again." }
+}
 $icons = Join-Path $root 'assets\icons'
 $sizes = [int[]](16, 20, 24, 32, 40, 48, 64, 128, 256)
 foreach ($s in $sizes) { if (-not (Test-Path (Join-Path $icons "$s.png"))) { throw "assets\icons\$s.png is missing (run: node scripts\make-icon.js)." } }
@@ -52,15 +60,22 @@ Copy-Item (Join-Path $root 'assets\icon.png') (Join-Path $app 'assets\icon.png')
 $listing = & npm.cmd ls --omit=dev --all --parseable --prefix $root 2>$null
 $nm = Join-Path $root 'node_modules'
 $copied = 0
-foreach ($dir in $listing) {
-  if (-not $dir -or -not $dir.StartsWith($nm, [StringComparison]::OrdinalIgnoreCase)) { continue }
-  $rel = $dir.Substring($root.Length).TrimStart('\')
+foreach ($line in $listing) {
+  if (-not $line) { continue }
+  # Only the part from "node_modules\" on is used. The start of the path cannot be trusted: npm
+  # replaces anything in its output that looks like a secret (a long ID in a folder name) with ***.
+  $i = $line.IndexOf('\node_modules\', [StringComparison]::OrdinalIgnoreCase)
+  if ($i -lt 0) { continue }
+  $rel = $line.Substring($i + 1)
+  $dir = Join-Path $root $rel
+  if (-not (Test-Path $dir)) { continue }
   $dest = Join-Path $app $rel
   if (Test-Path $dest) { continue }
-  New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
-  # copy the package without its own nested node_modules (those are listed separately)
-  New-Item -ItemType Directory -Force $dest | Out-Null
-  Get-ChildItem $dir -Force | Where-Object { $_.Name -ne 'node_modules' } | ForEach-Object { Copy-Item $_.FullName $dest -Recurse -Force }
+  # Copy the package without its nested node_modules (those are listed separately). robocopy and
+  # not Copy-Item: some packages have file names so long that a deep install folder goes past
+  # the 260 characters Copy-Item can handle.
+  & robocopy.exe $dir $dest /E /XD node_modules /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+  if ($LASTEXITCODE -ge 8) { throw "Copying the package $rel failed (robocopy $LASTEXITCODE)." }
   $copied++
 }
 if ($copied -lt 5) { throw "Only $copied runtime packages were found; is npm on PATH and node_modules complete?" }

@@ -19,6 +19,19 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
+# Windows does not run PowerShell scripts by default. Nobody should have to change that setting
+# by hand, and this installer does not change it either: it only lifts the limit for itself and
+# for the programs it starts (npm, the build script). The PC's own setting stays as it is.
+$env:PSExecutionPolicyPreference = 'Bypass'
+try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction Stop } catch {}
+# A policy set by an administrator (Group Policy) cannot be lifted this way, and should not be.
+$EnforcedPolicy = $null
+try {
+  $EnforcedPolicy = Get-ExecutionPolicy -List | Where-Object { $_.Scope -in 'MachinePolicy', 'UserPolicy' -and $_.ExecutionPolicy -notin 'Undefined', 'Bypass', 'Unrestricted', 'RemoteSigned' } | Select-Object -First 1
+} catch {}
+# where this script sits ($PSScriptRoot is empty when the script text is run without a file)
+if ($PSScriptRoot) { $Here = $PSScriptRoot } else { $Here = $null }
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
@@ -154,6 +167,9 @@ function Show-Found {
     $note1.Text = 'winget (the Windows package manager) was not found. Ollama can still be downloaded directly. Node.js cannot: install it from nodejs.org first, then start this setup again.'
   } else {
     $note1.Text = 'Missing programs are installed with winget, the package manager that comes with Windows. Windows may ask for permission once for Node.js.'
+  }
+  if ($EnforcedPolicy) {
+    $note1.Text = "This PC's administrator has set a rule ($($EnforcedPolicy.ExecutionPolicy), $($EnforcedPolicy.Scope)) that stops unsigned PowerShell scripts. The app's build script may be blocked by it; this setup cannot and does not override that rule."
   }
 }
 Show-Found
@@ -298,8 +314,9 @@ function Install-WithWinget([string]$id, [string]$name) {
 
 function Get-Source([string]$target) {
   # run from a checkout or an unpacked download: use those files; otherwise fetch them from GitHub
-  $local = Split-Path -Parent $PSScriptRoot
-  if (-not (Test-Path (Join-Path $local 'app\package.json'))) {
+  $local = $null
+  if ($Here) { $local = Split-Path -Parent $Here }
+  if (-not $local -or -not (Test-Path (Join-Path $local 'app\package.json'))) {
     Set-Status 'Downloading Local Claude ...'
     $zip = Join-Path $env:TEMP 'local-claude-source.zip'
     $unz = Join-Path $env:TEMP 'local-claude-source'
@@ -310,12 +327,21 @@ function Get-Source([string]$target) {
     Remove-Item $zip -Force -ErrorAction SilentlyContinue
   }
   if (-not (Test-Path (Join-Path $local 'app\scripts\setup-cli.js'))) { throw 'The downloaded files are older than this installer (app\scripts\setup-cli.js is missing).' }
-  if ([IO.Path]::GetFullPath($local).TrimEnd('\') -ieq [IO.Path]::GetFullPath($target).TrimEnd('\')) { return }  # installing in place
-  Set-Status 'Copying the app ...'
-  New-Item -ItemType Directory -Force $target | Out-Null
-  # chats, settings and notes of an earlier install stay; build output and packages are made fresh
-  $code = Invoke-Step 'robocopy.exe' "`"$local`" `"$target`" /E /NFL /NDL /NJH /NJS /NP /XD node_modules dist data notes .git out"
-  if ($code -ge 8) { throw "Copying the app failed (robocopy $code)." }
+  if ([IO.Path]::GetFullPath($local).TrimEnd('\') -ine [IO.Path]::GetFullPath($target).TrimEnd('\')) {
+    Set-Status 'Copying the app ...'
+    New-Item -ItemType Directory -Force $target | Out-Null
+    # chats, settings and notes of an earlier install stay; build output and packages are made fresh
+    $code = Invoke-Step 'robocopy.exe' "`"$local`" `"$target`" /E /NFL /NDL /NJH /NJS /NP /XD node_modules dist data notes .git out"
+    if ($code -ge 8) { throw "Copying the app failed (robocopy $code)." }
+  }
+  # Files that came out of a downloaded zip carry Windows' "from the internet" mark, and the copy
+  # keeps it. With the mark, PowerShell refuses the app's own scripts (the build script, the
+  # terminal launcher) on PCs set to "RemoteSigned". These are the files just installed: clear it.
+  try {
+    Get-ChildItem -LiteralPath $target -Recurse -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -notmatch '\\(node_modules|dist|data|notes|colibri|colibri-models)\\' } |
+      Unblock-File -ErrorAction SilentlyContinue
+  } catch {}
 }
 
 function New-Shortcut([string]$lnk, [string]$exe) {
@@ -359,8 +385,18 @@ function Step-One {
   if ((Invoke-Step $npm 'ci --no-audit --no-fund' $app) -ne 0) {
     if ((Invoke-Step $npm 'install --no-audit --no-fund' $app) -ne 0) { throw 'npm could not install the packages. See the log above.' }
   }
+  # npm no longer downloads Electron's program during install (Electron 44 fetches it on first use)
+  $node = Find-Node
+  if (-not (Test-Path (Join-Path $app 'node_modules\electron\dist\electron.exe'))) {
+    Set-Status 'Downloading the Electron program (about 120 MB) ...'
+    if ((Invoke-Step $node "`"$app\node_modules\electron\install.js`"" $app) -ne 0 -or -not (Test-Path (Join-Path $app 'node_modules\electron\dist\electron.exe'))) {
+      throw 'Electron could not be downloaded. Check the internet connection and press Install again.'
+    }
+  }
+  $running = @(Get-Process LocalClaude -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$app\*" })
+  if ($running.Count) { throw 'Local Claude is running from this folder. Close it and press Install again.' }
   Set-Status 'Building LocalClaude.exe ...'
-  if ((Invoke-Step 'powershell.exe' "-NoProfile -ExecutionPolicy Bypass -File `"$app\scripts\make-exe.ps1`"" $app) -ne 0) { throw 'Building the app failed. Is Local Claude running from this folder? Close it and try again.' }
+  if ((Invoke-Step 'powershell.exe' "-NoProfile -ExecutionPolicy Bypass -File `"$app\scripts\make-exe.ps1`"" $app) -ne 0) { throw 'Building the app failed. The reason is in the log below.' }
   $script:exe = Join-Path $app 'dist\LocalClaude\LocalClaude.exe'
   if (-not (Test-Path $script:exe)) { throw 'LocalClaude.exe was not built.' }
 
@@ -551,7 +587,8 @@ if ($SelfTest) {
   }
   & $shot 'step1'
   # the checkout this script sits in stands in for an installed copy
-  $script:target = Split-Path -Parent $PSScriptRoot
+  "execution policy: process = $(Get-ExecutionPolicy -Scope Process), for started programs = $env:PSExecutionPolicyPreference, enforced by an administrator = $([bool]$EnforcedPolicy)"
+  $script:target = Split-Path -Parent $Here
   $plan = Get-Plan $script:target
   Show-Plan $plan $script:target
   foreach ($id in @('quick', 'smart', 'coder')) { "step 2 $id ($($combos[$id].Items.Count) choices): $($combos[$id].SelectedItem)" }

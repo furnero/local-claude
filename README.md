@@ -41,6 +41,8 @@ Windows 10 or 11.
 
 The easy way is the installer: download this repo and double click `install\install.cmd`. It installs Ollama and Node.js if they are missing (with winget), builds the app into `%LOCALAPPDATA%\LocalClaude` and makes a Start menu shortcut. Then it shows your hardware and one list per mode with the models it knows plus whatever you already have in Ollama, the recommended one preselected. What you pick is downloaded straight into Ollama's model folder. Coder 30B is a checkbox there too, with its own two folders.
 
+You do not have to allow PowerShell scripts in Windows for any of this. The installer, the build and the launcher lift that limit for their own run only and leave the setting alone.
+
 By hand it is Node.js, a recent Ollama (it has to offer the Anthropic style `/v1/messages` endpoint, I use 0.33) and:
 
 ```
@@ -48,6 +50,8 @@ cd app
 npm install
 npm start
 ```
+
+If PowerShell answers "running scripts is disabled" to `npm`, type `npm.cmd` instead or use the normal Command Prompt.
 
 On the first start the app checks the hardware and offers to download the models it picked. If you would rather pull them yourself, these are the ones for an 8 GB card:
 
