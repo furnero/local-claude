@@ -42,7 +42,9 @@ function notesRoot() {
 /** The default working folder: the folder above LocalClaude (D:\VSCode Projects), else home. */
 function defaultFolder() {
   const r = root();
-  return r ? path.dirname(r) : os.homedir();
+  // an installed copy sits in the user's AppData: chats there start in the home folder instead
+  if (!r || /\\AppData\\/i.test(r)) return os.homedir();
+  return path.dirname(r);
 }
 
 function isInside(p, dir) {

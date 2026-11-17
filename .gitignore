@@ -4,3 +4,7 @@ data/
 notes/
 node_modules/
 dist/
+# the wrapped installer exe and what the installer fetches
+install/out/
+colibri/
+colibri-models/

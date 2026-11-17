@@ -37,7 +37,11 @@ You can still put any other Ollama model on a mode in the settings, with its own
 
 ## Setup
 
-You need Windows 10 or 11, Node.js and a recent Ollama (it has to offer the Anthropic style `/v1/messages` endpoint, I use 0.33).
+Windows 10 or 11.
+
+The easy way is the installer: download this repo and double click `install\install.cmd`. It installs Ollama and Node.js if they are missing (with winget), builds the app into `%LOCALAPPDATA%\LocalClaude` and makes a Start menu shortcut. Then it shows your hardware and one list per mode with the models it knows plus whatever you already have in Ollama, the recommended one preselected. What you pick is downloaded straight into Ollama's model folder. Coder 30B is a checkbox there too, with its own two folders.
+
+By hand it is Node.js, a recent Ollama (it has to offer the Anthropic style `/v1/messages` endpoint, I use 0.33) and:
 
 ```
 cd app

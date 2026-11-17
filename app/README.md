@@ -38,12 +38,25 @@ Ollama is started automatically. The first message in a mode prepares its model,
 | **Coder 30B only when installed** | The mode is left out of the mode menu until the colibrì engine folder and a model folder exist. Old chats in that mode keep their name. |
 | **Other models** | Settings → Local models: pick any installed Ollama model per mode, its context size, see whether it supports tools / thinking / images and whether it fits on the graphics card, and download new ones. A model without tool support becomes chat-only. |
 
+## Installer
+
+`..\install\install.cmd` opens a small setup window (`install.ps1`, Windows Forms, PowerShell 5.1).
+
+- **Step 1, programs:** installs Ollama and Node.js when missing (winget; Ollama falls back to its own installer), copies the app into the install folder (or downloads the repo from GitHub when it is not run from a checkout), runs `npm ci` and `make-exe`, makes the shortcuts. Optional: Claude Code for the terminal launcher. Chats, settings and notes of an earlier install are left alone.
+- **Step 2, models:** asks `scripts\setup-cli.js plan` for the hardware and the choices, so it uses the same rules as the app. One list per mode: the app's models plus anything installed in Ollama already. `setup-cli.js apply` downloads the missing ones through Ollama (they land in Ollama's model folder) and writes the modes into `data\settings.json`. A mode is only saved when its model is there.
+- **Coder 30B (optional):** `setup-cli.js coder30` installs Python when missing, downloads colibrì 2.1.0 and the abliterated Qwen3-Coder 30B GGUF (17 GB, resumable) into the two chosen folders, checks both against pinned SHA-256 sums, runs `coli import` and saves the folders in the settings. A file that does not match its checksum is deleted and nothing of it is run.
+- `..\install\build-setup-exe.ps1` wraps the two installer files into `install\out\LocalClaudeSetup.exe` with IExpress (192 KB, unsigned, not in git). That exe downloads the app from GitHub, so it only works for a version that is pushed.
+- `install.ps1 -SelfTest` builds the window off-screen, prints what it found and changes nothing.
+
+State on 2026-11-17: the window, the hardware plan and the model lists are checked with the self-test on one PC. A complete install on a clean PC, the winget installs and the Coder 30B download path have not been run yet.
+
 ## Files
 
 - `src/main/chat.js` the turn loop (stream, tools, questions, queue, self-check)
 - `src/main/ollama.js` server start, per-mode model with context window (`lc-<model>-<N>k`), model list, download
 - `src/main/colibri.js` the second engine for Coder 30B: starts and stops `coli.cmd serve`, private key, cleaned environment, log in `..\data\colibri.log`
 - `src/main/hardware.js` reads the hardware and recommends models for it (`recommend()` is a pure function, tested in `test/hardware.test.js`); `src/renderer/setup.js` is the dialog
+- `scripts/setup-cli.js` the installer's helper: `plan`, `apply`, `coder30` (plain Node, no Electron)
 - `src/main/context.js` trims what is sent to fit the context window
 - `src/main/project.js` project notes + Claude memory + system prompt
 - `src/main/tools.js`, `processes.js` the tools
