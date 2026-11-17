@@ -7,6 +7,13 @@ param([string]$Out)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $pkg = Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
+# node and npm are started by name below. Node.js can be installed without being on the search
+# path: then its usual folder is put on this run's path.
+if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
+  $nodeDir = Join-Path $env:ProgramFiles 'nodejs'
+  if (-not (Test-Path (Join-Path $nodeDir 'node.exe'))) { throw 'Node.js was not found. Install it from nodejs.org (or run install\install.cmd, which does that) and try again.' }
+  $env:Path = $nodeDir + ';' + $env:Path
+}
 $runtime = Join-Path $root 'node_modules\electron\dist'
 if (-not (Test-Path (Join-Path $runtime 'electron.exe'))) {
   # Since Electron 44 "npm install" no longer downloads the program itself; Electron fetches it on

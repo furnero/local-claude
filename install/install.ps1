@@ -14,7 +14,8 @@
 param(
   [string]$Dir = (Join-Path $env:LOCALAPPDATA 'LocalClaude'),
   [switch]$SelfTest,          # build the window, print what was found, save a picture, change nothing
-  [string]$SelfTestPicture
+  [string]$SelfTestPicture,
+  [switch]$Unattended         # for testing: run step 1 into -Dir without clicks and without shortcuts, print the log, download no models
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -388,9 +389,15 @@ function Step-One {
   $app = Join-Path $target 'app'
   $npm = Find-Npm
   if (-not $npm) { throw 'npm was not found next to Node.js.' }
-  Set-Status 'Installing the app''s packages (downloads Electron, a few minutes) ...'
-  if ((Invoke-Step $npm 'ci --no-audit --no-fund' $app) -ne 0) {
-    if ((Invoke-Step $npm 'install --no-audit --no-fund' $app) -ne 0) { throw 'npm could not install the packages. See the log above.' }
+  # Node.js can be installed without being on the search path (or only for programs started later).
+  # npm and the build script start "node" by name, so its folder goes first on this run's path.
+  $nodeDir = Split-Path (Find-Node)
+  if (($env:Path -split ';') -notcontains $nodeDir) { $env:Path = $nodeDir + ';' + $env:Path }
+  Set-Status 'Installing the app''s packages (a few minutes) ...'
+  # --ignore-scripts: no package gets to run its own install script. The app needs none of them
+  # (the only one is a build tool's), and one failing script must not stop the install.
+  if ((Invoke-Step $npm 'ci --ignore-scripts --no-audit --no-fund' $app) -ne 0) {
+    if ((Invoke-Step $npm 'install --ignore-scripts --no-audit --no-fund' $app) -ne 0) { throw 'npm could not install the packages. The reason is in the log below.' }
   }
   # npm no longer downloads Electron's program during install (Electron 44 fetches it on first use)
   $node = Find-Node
@@ -612,6 +619,32 @@ if ($SelfTest) {
   & $shot 'step2'
   $form.Close()
   return
+}
+
+# ---------------------------------------------------------------- unattended run of step 1 (for testing the real steps)
+
+if ($Unattended) {
+  $form.StartPosition = 'Manual'
+  $form.Location = New-Object Drawing.Point(-3000, -3000)
+  $form.ShowInTaskbar = $false
+  $form.Show()
+  $cbStart.Checked = $false
+  $cbDesk.Checked = $false
+  $cbTerminal.Checked = $false
+  $code = 0
+  try {
+    Step-One
+    $plan = Get-Plan $script:target
+    Show-Plan $plan $script:target
+    foreach ($id in @('quick', 'smart', 'coder')) { Write-Log "recommended for $id : $($combos[$id].SelectedItem)" }
+    Write-Log "built: $($script:exe)"
+  } catch {
+    Write-Log ('STOPPED: ' + $_.Exception.Message)
+    $code = 1
+  }
+  $log.Text
+  $form.Close()
+  exit $code
 }
 
 [void]$form.ShowDialog()
