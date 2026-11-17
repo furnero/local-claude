@@ -182,6 +182,11 @@ const server = http.createServer(async (req, res) => {
   const tu = (name, input, lead = 'One moment.') => stream(res, model, [{ type: 'thinking', thinking: `Thinking about ${name}.\nStep one, then step two.` }, { type: 'text', text: lead }, { type: 'tool_use', id: `toolu_${name}_${n}`, name, input }], 'tool_use');
   const sys = typeof p.system === 'string' ? p.system : (p.system || []).map((b) => b.text).join('\n');
   // ---- Local Claude scenarios
+  // Qwen3-Coder's tool call written as text with the opening tag missing: the app has to recover it
+  if (t.includes('malformed call')) {
+    await stream(res, model, [{ type: 'text', text: `Looking.\n<function=search_files>\n<parameter=name>\npackage.json\n</parameter>\n</function>\n</tool_call>` }], 'end_turn', 30);
+    return;
+  }
   if (t.includes('complex job')) return tu('suggest_smart_mode', { reason: 'it needs several steps and a server to test.' }, 'Let me check the mode first.');
   if (t.includes('pick one')) return tu('ask_user', { question: 'Which **Minecraft** version should the test server run?', options: ['1.21.1', '1.20.4'] });
   if (t.includes('start server')) return tu('start_process', { command: "1..60 | ForEach-Object { \"tick $_\"; Start-Sleep -Milliseconds 400 }; $l = [Console]::In.ReadLine(); \"got input: $l\"", name: 'fake server' });

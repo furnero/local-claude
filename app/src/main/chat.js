@@ -12,6 +12,7 @@ const mcp = require('./mcp');
 const project = require('./project');
 const ollama = require('./ollama');
 const colibri = require('./colibri');
+const server = require('./server');
 const hardware = require('./hardware');
 const context = require('./context');
 const { modelInfo, modeOf, costOf, MODELS } = require('./models');
@@ -42,8 +43,10 @@ function clientFor(baseURL = ollama.BASE, apiKey = 'local') {
   return clients.get(baseURL);
 }
 
-/** Gets the mode's model ready on its engine. Only one engine holds a model at a time. */
+/** Gets the mode's model ready on its engine. On this PC only one engine holds a model at a time. */
 async function prepareMode(mode, onStatus) {
+  // a model on another machine needs nothing of this PC's memory: local models stay as they are
+  if (modelInfo(mode)?.engine === 'server') return server.prepare(onStatus);
   if (modelInfo(mode)?.engine === 'colibri') return colibri.prepare(onStatus, () => ollama.unloadLoaded());
   await colibri.stop().catch(() => {});
   return ollama.prepare(mode, onStatus);
@@ -84,7 +87,7 @@ const slowRuns = new Map(); // "mode:model" -> slow answers in a row
 const SLOW_TPS = { quick: 6, smart: 2.5, coder: 2.5 }; // tokens per second, while writing (loading and reading are not counted)
 
 async function speedCheck(conv, rt, meta) {
-  if (rt.engine) return; // the colibri mode is slow by design and says so itself
+  if (rt.engine) return; // colibri is slow by design and says so itself; where a server keeps its model is its own business
   const key = `${conv.model}:${rt.base}`;
   if (hinted.has(key) || store.getSettings().hintsOff?.[key]) return;
   let text = null;
@@ -114,9 +117,8 @@ const frozenSystem = new Map(); // conversation id -> { key, system }
 function refreshSystem(conv, rt) {
   const s = store.getSettings();
   const smart = !!modelInfo(conv.model)?.smart;
-  const slow = !!rt.engine;
   const key = `${conv.model}|${rt.model}|${conv.cwd}`;
-  const kept = slow ? frozenSystem.get(conv.id) : null;
+  const kept = rt.frozen ? frozenSystem.get(conv.id) : null;
   if (kept && kept.key === key && conv.messages.length > 1) {
     conv.system = kept.system;
     return;
@@ -129,10 +131,10 @@ function refreshSystem(conv, rt) {
     name: s.name,
     customInstructions: s.customInstructions,
     web: !!s.webSearch,
-    engine: slow ? 'the colibrì engine' : 'Ollama',
-    lean: slow,
+    where: rt.where,
+    lean: !!rt.lean,
   });
-  if (slow) frozenSystem.set(conv.id, { key, system: conv.system });
+  if (rt.frozen) frozenSystem.set(conv.id, { key, system: conv.system });
   else frozenSystem.delete(conv.id);
   if (!smart) {
     conv.system +=
@@ -189,7 +191,7 @@ function toolList(conv, opts) {
 
 function buildParams(conv, opts, rt) {
   // a slow engine writes about a token a second: a smaller answer limit leaves more of its context for the chat
-  const maxTokens = Math.max(1024, Math.min(rt.engine ? 3072 : 16384, Math.floor(rt.ctx / 3)));
+  const maxTokens = Math.max(1024, Math.min(rt.maxTokens || 16384, Math.floor(rt.ctx / 3)));
   const params = { model: rt.model, max_tokens: maxTokens, system: conv.system };
   if (rt.caps.includes('tools')) {
     const t = toolList(conv, opts);
@@ -199,6 +201,55 @@ function buildParams(conv, opts, rt) {
   const fitted = context.fit(conv.messages, { ctx: rt.ctx, system: conv.system, tools: params.tools, maxTokens });
   params.messages = fitted.messages;
   return { params, fitted };
+}
+
+/**
+ * Qwen3-Coder writes a tool call as
+ *   <tool_call><function=NAME><parameter=KEY>value</parameter>...</function></tool_call>
+ * and the server turns that into a real tool call. Sometimes the model leaves out the opening
+ * tag; then the server passes the whole thing through as text and nothing runs. This finds such
+ * text, for tools that really exist, and returns the message with real tool calls in its place
+ * (or null when there is nothing to recover).
+ */
+function recoverToolCalls(content, toolDefs) {
+  if (!toolDefs?.length || content.some((b) => b.type === 'tool_use')) return null;
+  const byName = new Map(toolDefs.map((t) => [t.name, t]));
+  const out = [];
+  let found = 0;
+  for (const b of content) {
+    if (b.type !== 'text' || !/<function=/.test(b.text || '')) {
+      out.push(b);
+      continue;
+    }
+    const calls = [];
+    const rest = b.text.replace(/(?:<tool_call>\s*)?<function=([\w.-]+)>([\s\S]*?)<\/function>\s*(?:<\/tool_call>)?/g, (whole, name, body) => {
+      const def = byName.get(name);
+      if (!def) return whole; // not one of our tools: leave the text alone
+      const props = def.input_schema?.properties || {};
+      const input = {};
+      for (const m of body.matchAll(/<parameter=([\w.-]+)>\n?([\s\S]*?)\n?<\/parameter>/g)) {
+        let v = m[2];
+        const type = props[m[1]]?.type;
+        if (type && type !== 'string') {
+          try {
+            v = JSON.parse(v);
+          } catch {}
+        }
+        input[m[1]] = v;
+      }
+      calls.push({ type: 'tool_use', id: `toolu_rec_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, name, input });
+      return '';
+    });
+    if (!calls.length) {
+      out.push(b);
+      continue;
+    }
+    found += calls.length;
+    const text = rest.replace(/<\/?tool_call>/g, '').trim();
+    if (text) out.push({ type: 'text', text });
+    out.push(...calls);
+  }
+  return found ? out : null;
 }
 
 // response blocks -> plain JSON we can send back as is
@@ -268,7 +319,7 @@ async function runTurn(conv, opts) {
     ctrl.rt = await prepareMode(conv.model, (text) => emit(conv.id, { type: 'status', text }));
     const known = frozenSystem.has(conv.id);
     refreshSystem(conv, ctrl.rt);
-    if (ctrl.rt.engine && !known) emit(conv.id, { type: 'status', text: 'This mode reads the whole chat before its first word: the first answer takes about 10 minutes, later ones start within seconds.' });
+    if (ctrl.rt.startNote && !known) emit(conv.id, { type: 'status', text: ctrl.rt.startNote });
     for (;;) {
       if (signal.aborted) {
         stopped = true;
@@ -325,7 +376,25 @@ async function runTurn(conv, opts) {
         throw e;
       }
 
-      const content = plain(final.content);
+      let content = plain(final.content);
+      // a tool call the model wrote as text (see recoverToolCalls): run it as the call it was meant to be
+      const fixed = recoverToolCalls(content, params.tools);
+      if (fixed) {
+        content = fixed;
+        // show the corrected message instead of the raw markup that was streamed
+        emit(conv.id, { type: 'msg_retry', msgIndex });
+        emit(conv.id, { type: 'msg_start', msgIndex, model: conv.model });
+        content.forEach((b, index) => {
+          if (b.type === 'tool_use') {
+            emit(conv.id, { type: 'block_start', msgIndex, index, block: { type: 'tool_use', id: b.id, name: b.name, input: {} } });
+            emit(conv.id, { type: 'block_delta', msgIndex, index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(b.input) } });
+          } else if (b.type === 'text') {
+            emit(conv.id, { type: 'block_start', msgIndex, index, block: { type: 'text', text: '' } });
+            emit(conv.id, { type: 'block_delta', msgIndex, index, delta: { type: 'text_delta', text: b.text } });
+          } else emit(conv.id, { type: 'block_start', msgIndex, index, block: b });
+          emit(conv.id, { type: 'block_stop', msgIndex, index });
+        });
+      }
       // an empty answer would make the next request invalid
       if (!content.length) content.push({ type: 'text', text: '(no answer)' });
       conv.messages.push({ role: 'assistant', content });

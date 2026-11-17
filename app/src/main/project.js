@@ -112,7 +112,8 @@ function readText(p) {
 }
 
 /** The system prompt for one turn. Rebuilt every turn so it always holds the latest notes. */
-function buildPrompt({ model, smart, coder, cwd, name, customInstructions, web, engine = 'Ollama', lean = false }) {
+function buildPrompt({ model, smart, coder, cwd, name, customInstructions, web, where, lean = false }) {
+  where = where || "offline on the user's Windows PC through Ollama";
   const info = resolve(cwd);
   try {
     ensureNotes(info, cwd);
@@ -120,7 +121,7 @@ function buildPrompt({ model, smart, coder, cwd, name, customInstructions, web, 
   const date = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const L = [];
   L.push(
-    `You are a local AI assistant: the open model ${model}, running offline on the user's Windows PC through ${engine}, inside the Local Claude chat app. You are not Claude.`,
+    `You are a local AI assistant: the open model ${model}, running ${where}, inside the Local Claude chat app. You are not Claude.`,
     `The current date is ${date}.${name ? ` The user's name is ${name}.` : ''} The chat's working folder is ${cwd}.`,
     'The app renders Markdown and LaTeX math ($...$). For a self-contained web page or SVG drawing, put the whole code in one ```html or ```svg block: the app shows a live preview.',
     '',

@@ -92,7 +92,7 @@ async function key(app, page) {
   page.append(h('h3', { text: 'Local models' }));
   const loading = h('div', { class: 'hint', text: 'Asking Ollama…' });
   page.append(loading);
-  const [ov, proj, coli] = await Promise.all([window.aster.ollamaOverview(), window.aster.projectInfo(app.currentCwd()), window.aster.colibriStatus()]);
+  const [ov, proj, coli, srv] = await Promise.all([window.aster.ollamaOverview(), window.aster.projectInfo(app.currentCwd()), window.aster.colibriStatus(), window.aster.serverStatus()]);
   loading.remove();
   const gb = (mb) => `${(mb / 1024).toFixed(1)} GB`;
   const vram = ov.gpu?.vramMb || 0;
@@ -232,6 +232,72 @@ async function key(app, page) {
     );
   };
 
+  // Server mode: a model on another machine of the user's
+  const serverCard = () => {
+    const save = async (patch) => {
+      await app.saveSettings({ server: { ...(app.settings().server || {}), ...patch } });
+      await app.reloadState();
+      page.innerHTML = '';
+      key(app, page);
+    };
+    const text = (value, placeholder, field, width = '260px') => {
+      const i = h('input', { class: 'input mono', value: value || '', placeholder, spellcheck: 'false', style: { width } });
+      i.addEventListener('change', () => save({ [field]: i.value.trim() }));
+      i.addEventListener('keydown', (e) => e.key === 'Enter' && i.blur());
+      return i;
+    };
+    const keyRow = h('div', { style: { display: 'flex', gap: '8px' } }, text(srv.key, 'optional', 'key', '180px'), h('button', { class: 'btn ghost sm', text: 'Browse', onclick: async () => {
+      const p = await window.aster.serverPickKey(srv.key);
+      if (p) save({ key: p });
+    } }));
+    const port = h('input', { class: 'input', type: 'number', min: '1024', max: '65535', value: String(srv.port), style: { width: '110px' } });
+    port.addEventListener('change', () => save({ port: Number(port.value) || 11435 }));
+    let model;
+    if (srv.models.length) {
+      model = h('select', { class: 'select', style: { width: '260px' } });
+      if (srv.base && !srv.models.includes(srv.base)) model.append(h('option', { value: srv.base, text: `${srv.base} (not on the server)`, selected: true }));
+      if (!srv.base) model.append(h('option', { value: '', text: 'Pick a model', selected: true }));
+      for (const n of srv.models) model.append(h('option', { value: n, text: n, selected: n === srv.base }));
+      model.onchange = () => save({ base: model.value });
+    } else model = text(srv.base, 'for example  qwen3-coder:30b', 'base');
+    const ctxSel = h('select', { class: 'select', style: { width: '170px' } });
+    for (const n of srv.ctxChoices) ctxSel.append(h('option', { value: String(n), text: ctxLabel(n), selected: n === srv.ctx }));
+    if (!srv.ctxChoices.includes(srv.ctx)) ctxSel.append(h('option', { value: String(srv.ctx), text: ctxLabel(srv.ctx), selected: true }));
+    ctxSel.onchange = () => save({ ctx: Number(ctxSel.value) });
+    const state = h('span', { class: `badge ${srv.reachable ? 'ok' : srv.configured ? 'err' : ''}`, text: srv.reachable ? 'Connected' : srv.ssh || srv.url ? 'Not connected' : 'Not set up' });
+    const result = h('div', { class: 'hint', text: srv.error || '' });
+    if (srv.error) result.style.color = 'var(--danger)';
+    const check = h('button', { class: 'btn ghost sm', text: 'Connect and check', onclick: async () => {
+      check.disabled = true;
+      result.style.color = '';
+      result.textContent = 'Connecting…';
+      const r = await window.aster.serverStatus(true);
+      if (r.reachable) {
+        toast(`Connected: ${r.models.length} model${r.models.length === 1 ? '' : 's'} on the server`);
+        page.innerHTML = '';
+        key(app, page);
+        return;
+      }
+      check.disabled = false;
+      result.textContent = r.error || 'The server does not answer.';
+      result.style.color = 'var(--danger)';
+    } });
+    return h(
+      'div',
+      { class: 'card', 'data-card': 'server' },
+      h('b', { text: 'Server mode (a model on another machine)' }),
+      h('div', { class: 'hint', text: 'Runs the model on a server of yours that has Ollama, for example one with more RAM than this PC. The tools still act on this PC; only the model runs over there. The app opens an SSH tunnel when a chat needs it and closes it when the app closes. The SSH key must work without a password prompt, and you must have connected to the server once before, so its identity is known. The mode shows up in the mode menu once a server and a model are entered.' }),
+      row('Status', srv.reachable ? `${srv.models.length} model${srv.models.length === 1 ? '' : 's'} on the server` : 'Fill in the server, then connect', h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, state, check)),
+      result,
+      row('SSH target', 'user@host, or a host name from your SSH config', text(srv.ssh, 'user@host', 'ssh')),
+      row('SSH key file', 'Leave empty to use your default key', keyRow),
+      row('Port on this PC', 'The local end of the tunnel. 11434 is this PC\'s own Ollama, so use another one.', port),
+      row('Direct address instead', 'Only for a server on your own network without SSH, for example http://192.168.1.20:11434', text(srv.url, 'empty when SSH is used', 'url')),
+      row('Model', 'A model that is installed in the server\'s Ollama', model),
+      row('Context size', 'Each 16k costs the server about 1.5 GB of RAM with a 30B model.', ctxSel),
+    );
+  };
+
   // RAM limit + how long a model stays loaded
   const memoryCard = () => {
     const limit = h('input', { class: 'input', type: 'number', min: '0', step: '0.5', placeholder: 'no limit', value: ov.ramLimitGb ? String(ov.ramLimitGb) : '', style: { width: '110px' } });
@@ -320,6 +386,7 @@ async function key(app, page) {
     modeCard('smart', 'Smart mode', 'The model for complex jobs. Bigger is better here; with a bigger card you can pick a much bigger model.'),
     modeCard('coder', 'Coder mode', 'A coding model with the refusals removed ("abliterated"), used with the same careful method as Smart. It still asks before commands and file changes.'),
     colibriCard(),
+    serverCard(),
     memoryCard(),
     h(
       'div',

@@ -27,6 +27,8 @@ Quick checks if a task is too big for it and asks if you want to switch to Smart
 
 Coder 30B does not fit on the card at all. It runs through [colibrì](https://github.com/JustVugg/colibri), which keeps part of the model on the GPU and reads the rest from the SSD while it works. The first answer of a chat takes 7 to 10 minutes because it has to read all the instructions first, after that answers start within seconds. It is the smartest of the four and you need patience for it.
 
+There is also a Server mode. If you have a machine with more RAM than your PC, put Ollama and a big model on it and enter it in the settings (SSH target and model). The app opens an SSH tunnel when a chat needs it, the tools still act on your PC and only the model runs over there. I use it with Qwen3-Coder 30B on a VM without a graphics card: about 13 tokens/s on two old Xeons, roughly ten times what colibrì gets out of my GTX 1070. The first answer of a chat takes a few minutes there because the server reads the instructions slowly, after that it starts quickly.
+
 That table is what my PC gets. The app looks at your graphics card and RAM and picks models that fit yours: 27B models on a 24 GB card, the 9B completely on the card with 12 GB, small ones on the CPU if there is no card. You see what it found and what it would download, and you can change every choice before anything happens. Later it is under Settings, Local models, "Check this PC".
 
 The pick is a guess from the hardware. If a model then turns out to sit mostly in RAM or to crawl, the chat tells you once and names a smaller one. It never switches by itself.

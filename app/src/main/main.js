@@ -21,6 +21,7 @@ const chat = require('./chat');
 const tools = require('./tools');
 const ollama = require('./ollama');
 const colibri = require('./colibri');
+const server = require('./server');
 const hardware = require('./hardware');
 const project = require('./project');
 const processes = require('./processes');
@@ -149,6 +150,8 @@ function getConv(id) {
 
 const handle = (ch, fn) => ipcMain.handle(ch, (_e, ...args) => fn(...args));
 const modelInfoOf = (id) => MODELS.find((m) => m.id === modeOf(id));
+/** Is a mode's engine usable right now? (Modes without their own engine run on the local Ollama.) */
+const engineAvailable = (engine) => (engine === 'colibri' ? colibri.available() : engine === 'server' ? server.configured() : true);
 
 // ---------------------------------------------------------------- setup for this PC's hardware
 
@@ -229,10 +232,12 @@ handle('state:get', () => ({
   keyHint: null,
   defaultCwd: config.workingDirectory(),
   // a default mode whose engine is not on this PC falls back to Smart (the saved setting stays)
-  settings: modelInfoOf(store.getSettings().model)?.engine === 'colibri' && !colibri.available() ? { ...store.getSettings(), model: 'smart' } : store.getSettings(),
+  settings: !engineAvailable(modelInfoOf(store.getSettings().model)?.engine) ? { ...store.getSettings(), model: 'smart' } : store.getSettings(),
   // "unavailable" modes stay in the list so old chats keep their name, but the mode menu leaves them out
   models: MODELS.map(({ id, name, desc, smart, engine }) =>
-    engine === 'colibri'
+    engine === 'server'
+      ? { id, name, desc: server.configured() ? `${server.config().base} · ${desc}` : desc, smart, engine, base: server.label(), ctx: server.config().ctx, unavailable: !server.configured() }
+      : engine === 'colibri'
       ? { id, name, desc, smart, engine, base: colibri.labelOf(colibri.config()), ctx: colibri.config().ctx, unavailable: !colibri.available() }
       : { id, name, desc: `${ollama.modeConfig(id).base} · ${desc}`, smart, base: ollama.modeConfig(id).base, ctx: ollama.modeConfig(id).ctx },
   ),
@@ -276,6 +281,11 @@ handle('procs:log', (id) => {
 
 handle('ollama:overview', () => ollama.overview());
 handle('colibri:status', () => colibri.status());
+handle('server:status', (connect) => server.status(!!connect));
+handle('server:pickKey', async (current) => {
+  const r = await dialog.showOpenDialog(win, { title: 'Choose the SSH key file', defaultPath: current || path.join(require('node:os').homedir(), '.ssh'), properties: ['openFile', 'showHiddenFiles'] });
+  return r.canceled ? null : r.filePaths[0] || null;
+});
 handle('colibri:stop', async () => {
   await colibri.stop();
   return colibri.status();
@@ -294,6 +304,7 @@ handle('ollama:cancelPull', () => ollama.cancelPull());
 handle('settings:save', (patch) => {
   const s = store.saveSettings(patch || {});
   if (patch && (patch.modes || 'ramLimitGb' in patch || 'keepAlive' in patch)) ollama.settingsChanged();
+  if (patch && patch.server) server.stop(); // another server or port: the next chat opens a fresh tunnel
   return s;
 });
 
@@ -479,6 +490,7 @@ app.on('before-quit', (e) => {
   // Stopping the colibri engine takes several seconds (its own stop command starts Python). With the
   // short wait the app was gone first and the engine kept running with the model in memory.
   const wait = colibri.active() ? 20000 : 2500;
+  server.stop();
   Promise.race([Promise.all([mcp.shutdown(), ollama.unloadAll(), colibri.stop()]), new Promise((r) => setTimeout(r, wait))]).finally(() => app.quit());
 });
 

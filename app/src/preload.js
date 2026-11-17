@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('aster', {
   openProcessLog: call('procs:log'),
   ollamaOverview: call('ollama:overview'),
   colibriStatus: call('colibri:status'),
+  serverStatus: call('server:status'),
+  serverPickKey: call('server:pickKey'),
   colibriStop: call('colibri:stop'),
   colibriPickFolder: call('colibri:pickFolder'),
   setupPlan: call('setup:plan'),

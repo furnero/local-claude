@@ -281,7 +281,8 @@ const requests = () =>
   await c.ev(`window.__aster.app.setModel('smart')`);
 
   // 8g. the third mode: Coder
-  check('the mode menu offers Quick, Smart, Coder and Coder 30B', (await c.ev(`window.__aster.state().models.map(m => m.name).join(',')`)) === 'Quick,Smart,Coder,Coder 30B');
+  check('the mode menu offers Quick, Smart, Coder and Coder 30B', (await c.ev(`window.__aster.state().models.filter(m => !m.unavailable).map(m => m.name).join(',')`)) === 'Quick,Smart,Coder,Coder 30B');
+  check('the Server mode exists but is not offered until it is set up', (await c.ev(`window.__aster.state().models.find(m => m.id === 'server')?.unavailable`)) === true);
   await c.ev('window.__aster.newChat()');
   await c.ev(`window.__aster.app.setModel('coder')`);
   check('mode button shows Coder', /Coder/.test(await c.ev(`document.querySelector('.model-btn').innerText`)));
@@ -387,6 +388,48 @@ const requests = () =>
   const off = await waitFor(`!document.querySelector('.hint-slow') && Object.keys(window.__aster.app.settings().hintsOff || {}).join(',')`, 5000);
   check('"Don\'t show again" removes it and is remembered', off === 'smart:qwen3.5:27b', String(off));
   await fetch(`${API}/test/placement`, { method: 'POST', body: 'null' });
+
+  // 12. Server mode: a model on another machine (the test API stands in for the server's Ollama)
+  await c.ev(`window.__aster.app.openSettings('key')`);
+  const srvCard = await waitFor(`document.querySelector('[data-card="server"]')?.innerText`);
+  check('settings show the Server mode card, not set up', /Server mode \(a model on another machine\)/.test(srvCard || '') && /Not set up/.test(srvCard || '') && /SSH target/.test(srvCard || ''), (srvCard || '').slice(0, 80).replace(/\n/g, ' | '));
+  await c.ev(`document.querySelector('.set-close').click()`);
+  await c.ev(`(async () => { await window.__aster.app.saveSettings({ server: { url: ${JSON.stringify(API)}, base: 'qwen3-coder:30b', ctx: 32768 } }); await window.__aster.app.reloadState(); })()`);
+  const srvMode = await c.ev(`JSON.stringify(window.__aster.state().models.find(m => m.id === 'server'))`);
+  check('once a server and a model are entered the mode is offered', /"base":"qwen3-coder:30b \(server\)"/.test(srvMode) && !/"unavailable":true/.test(srvMode), srvMode.slice(0, 160));
+  await c.ev('window.__aster.newChat()');
+  await c.ev(`window.__aster.app.setModel('server')`);
+  check('mode button shows Server', /Server/.test(await c.ev(`document.querySelector('.model-btn').innerText`)));
+  await say('hello from the server mode');
+  await idle();
+  r = requests().pop();
+  check('Server mode sends the model with its context size, with tools', r.body.model === 'lc-qwen3-coder-30b-32k' && Array.isArray(r.body.tools) && r.body.tools.length > 5, r.body.model);
+  check('its instructions say where the model runs and leave out the long memory index', /on a server of the user/.test(r.body.system) && /your tools still act on the user's Windows PC/.test(r.body.system) && /search_memory searches these notes too/.test(r.body.system) && /# Coder mode/.test(r.body.system), `${r.body.system.length} chars`);
+  check('Server mode has the normal answer limit, not the small one of the slow engine', r.body.max_tokens === 10922, String(r.body.max_tokens));
+  const sys1 = r.body.system;
+  // something that changes the instructions (a saved note), then a second message in the same chat
+  await say('remember this');
+  await idle();
+  await say('hello again from the server mode');
+  await idle();
+  r = requests().pop();
+  check('the instructions stay identical within a chat (a change makes the server re-read everything)', r.body.system === sys1);
+  check('the chat keeps Server mode and shows it under the answer', (await c.ev('window.__aster.current().model')) === 'server' && /Server/.test(await c.ev(`[...document.querySelectorAll('.a-meta')].pop()?.innerText || ''`)));
+  await c.ev(`window.__aster.app.openSettings('key')`);
+  const srvCard2 = await waitFor(`/Connected/.test(document.querySelector('[data-card="server"]')?.innerText || '') && document.querySelector('[data-card="server"]').innerText`);
+  check('settings show the server as connected with its model', /1 model on the server/.test(srvCard2 || ''), (srvCard2 || '').slice(0, 120).replace(/\n/g, ' | '));
+  await c.shot('12-server');
+  await c.ev(`document.querySelector('.set-close').click()`);
+  await c.ev(`window.__aster.app.setModel('smart')`);
+
+  // 13. a tool call the model wrote as text (Qwen3-Coder without its opening tag) still runs
+  await c.ev('window.__aster.newChat()');
+  await say('try a malformed call please');
+  await idle();
+  check('a tool call written as text is run as a real call', /package\.json/.test(await cardText()), (await cardText()).slice(0, 80).replace(/\n/g, ' | '));
+  const lastMsgs = await c.ev(`JSON.stringify(window.__aster.current().messages.slice(1, 3).map(m => m.content.map(b => b.type)))`);
+  check('the chat holds the call and its result, not the raw markup', lastMsgs === '[["text","tool_use"],["tool_result"]]', lastMsgs);
+  check('the raw markup is not left on screen', !/<function=|<\/tool_call>/.test(await c.ev(`document.querySelector('.thread, #thread, main')?.innerText || document.body.innerText`)));
 
   c.close();
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');

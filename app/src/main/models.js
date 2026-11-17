@@ -9,6 +9,8 @@ const MODELS = [
   // a 30B coding model through the colibri engine (see colibri.js): much stronger, about 1 token a second.
   // The default folder holds the abliterated build (refusals removed), like the Coder mode's model.
   { id: 'coder30', name: 'Coder 30B', desc: 'Qwen3-Coder 30B without refusals, through colibrì · strongest, very slow', smart: true, coder: true, engine: 'colibri' },
+  // a model on another machine of the user's (see server.js); offered once it is set up in Settings
+  { id: 'server', name: 'Server', desc: 'a model on your own server · the tools still act on this PC', smart: true, coder: true, engine: 'server' },
 ];
 
 // Ollama can only switch a model's reasoning on or off, so "effort" is just that.
@@ -20,7 +22,7 @@ const EFFORTS = [
 /** Mode id for a conversation's model field (older chats stored the Ollama model name). */
 function modeOf(id) {
   if (id === 'smart' || id === 'local-agent') return 'smart';
-  if (id === 'coder' || id === 'coder30') return id;
+  if (MODELS.some((m) => m.id === id)) return id;
   return 'quick';
 }
 

@@ -28,6 +28,16 @@ function labelOf(c) {
   return (name || 'model') + ' (colibrì)';
 }
 
+// How chat.js has to treat this engine: short instructions that stay the same for a whole chat (it
+// re-reads everything after any change), a small answer limit, and a note before the first answer.
+const SLOW = {
+  lean: true,
+  frozen: true,
+  maxTokens: 3072,
+  where: "offline on the user's Windows PC through the colibrì engine",
+  startNote: 'This mode reads the whole chat before its first word: the first answer takes about 10 minutes, later ones start within seconds.',
+};
+
 let child = null;
 let starting = null;
 let used = false; // this app run talked to its server: closing the app has to wait for it to stop
@@ -147,7 +157,7 @@ async function start(c, onStatus) {
  */
 async function prepare(onStatus = () => {}, freeOllama = async () => {}) {
   const c = config();
-  if (FAKE_BASE) return { engine: 'colibri', model: 'qwen3-coder-30b', base: labelOf(c), ctx: c.ctx, caps: ['completion', 'tools'], baseURL: FAKE_BASE };
+  if (FAKE_BASE) return { engine: 'colibri', model: 'qwen3-coder-30b', base: labelOf(c), ctx: c.ctx, caps: ['completion', 'tools'], baseURL: FAKE_BASE, ...SLOW };
   let id = await serving(c);
   if (id === 'foreign') {
     // something else answers on that port, or a server from before the key existed: replace it
@@ -165,7 +175,7 @@ async function prepare(onStatus = () => {}, freeOllama = async () => {}) {
     id = await starting;
   }
   used = true;
-  return { engine: 'colibri', model: id, base: labelOf(c), ctx: c.ctx, caps: ['completion', 'tools'], baseURL: baseOf(c), apiKey: apiKey() };
+  return { engine: 'colibri', model: id, base: labelOf(c), ctx: c.ctx, caps: ['completion', 'tools'], baseURL: baseOf(c), apiKey: apiKey(), ...SLOW };
 }
 
 function killTree(p) {
